@@ -1,0 +1,9 @@
+**/node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.DS_Store
+dist/impit-node.win32-x64-msvc.node
+nuvio-proxy-2
+dist_wasm
