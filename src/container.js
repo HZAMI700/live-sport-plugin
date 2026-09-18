@@ -21,6 +21,8 @@ const StreamedPkProvider = require('./providers/StreamedPkProvider');
 
 const YamlProviderBuilder = require('./services/YamlProviderBuilder');
 const StreamResolveCache = require('./services/StreamResolveCache');
+const HtmlSanitizerService = require('./services/HtmlSanitizerService');
+const EmbedResolutionService = require('./services/EmbedResolutionService');
 
 const container = createContainer({
   injectionMode: InjectionMode.PROXY
@@ -34,7 +36,9 @@ container.register({
   cronService: asClass(CronService).singleton(),
   matchAggregator: asClass(MatchAggregator).singleton(),
   streamScorer: asClass(StreamScoringService).singleton(),
-  streamResolveCache: asValue(new StreamResolveCache())
+  streamResolveCache: asValue(new StreamResolveCache()),
+  htmlSanitizerService: asClass(HtmlSanitizerService).singleton(),
+  embedResolutionService: asClass(EmbedResolutionService).singleton()
 });
 
 // Build dynamic YAML Providers

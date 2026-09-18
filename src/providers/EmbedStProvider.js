@@ -8,6 +8,7 @@ class EmbedStProvider extends BaseProvider {
     super(opts);
     this.name = 'EmbedSt';
     this.embedIndiaProvider = opts.embedIndiaProvider;
+    this.embedResolutionService = opts.embedResolutionService;
   }
 
   async getMatches() {
@@ -166,12 +167,32 @@ class EmbedStProvider extends BaseProvider {
 
 
 
-    // ─── Tier 3: Raw embed fallback — always appended ────────────────────────
-    streams.push(new StreamEntity({
-      name: 'EmbedSt',
-      title: `${matchTitle} (Web Player)`,
-      externalUrl: `/watch?url=${encodeURIComponent(embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`,
-    }));
+    // ─── Tier 2: Server-Side EmbedExtractorChain via EmbedResolutionService ──
+    if (streams.length === 0 && this.embedResolutionService) {
+      try {
+        const resolved = await this.embedResolutionService.resolveToStreamEntity(embedUrl, matchTitle, {
+          providerName: this.name,
+          referer
+        });
+        if (resolved) {
+          streams.push(resolved);
+        }
+      } catch (err) {
+        console.warn(`[${this.name}] EmbedResolutionService error for ${embedUrl}: ${err.message}`);
+      }
+    }
+
+    // ─── Tier 3: Sanitized Clean Player Proxy Fallback ────────────────────────
+    // Never load the raw ad-heavy third-party embed directly.
+    const cleanPlayerUrl = `/api/clean-player?url=${encodeURIComponent(embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`;
+    const hasCleanPlayer = streams.some(s => s.externalUrl === cleanPlayerUrl);
+    if (!hasCleanPlayer) {
+      streams.push(new StreamEntity({
+        name: 'EmbedSt',
+        title: `${matchTitle} (Clean Player)`,
+        externalUrl: cleanPlayerUrl,
+      }));
+    }
 
     return streams;
   }

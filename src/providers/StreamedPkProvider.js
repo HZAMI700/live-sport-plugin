@@ -8,6 +8,7 @@ class StreamedPkProvider extends BaseProvider {
     this.name = 'StreamedPk';
     this.embedStProvider = opts.embedStProvider;
     this.embedIndiaProvider = opts.embedIndiaProvider;
+    this.embedResolutionService = opts.embedResolutionService;
     this.apiUrl = 'https://streamed.pk/api';
 
     this.fetchMatches = this.circuitBreaker.wrap(`${this.name}_fetchMatches`, async () => {
@@ -186,11 +187,22 @@ class StreamedPkProvider extends BaseProvider {
                 label,
                 { embedUrl: streamItem.embedUrl }
               );
+            } else if (this.embedResolutionService) {
+              const entity = await this.embedResolutionService.resolveToStreamEntity(
+                streamItem.embedUrl,
+                label,
+                { providerName: 'StreamedPk' }
+              );
+              return entity ? [entity] : [new StreamEntity({
+                name: 'StreamedPk',
+                title: `${label} (Clean Player)`,
+                externalUrl: `/api/clean-player?url=${encodeURIComponent(streamItem.embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`
+              })];
             } else {
               return [new StreamEntity({
                 name: 'StreamedPk',
-                title: `${label} (Web Player)`,
-                externalUrl: `/watch?url=${encodeURIComponent(streamItem.embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`
+                title: `${label} (Clean Player)`,
+                externalUrl: `/api/clean-player?url=${encodeURIComponent(streamItem.embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`
               })];
             }
           });

@@ -149,11 +149,11 @@ class EmbedIndiaProvider extends BaseProvider {
       }));
     }
 
-    // 🌍 Tier 3: Raw embed fallback - ALWAYS appended 🌍
+    // 🌍 Tier 3: Clean player proxy fallback - ALWAYS appended 🌍
     streams.push(new StreamEntity({
       name: 'EmbedIndia',
-      title: `${matchTitle} (Web Player)`,
-      externalUrl: `/watch?url=${encodeURIComponent(embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`,
+      title: `${matchTitle} (Clean Player)`,
+      externalUrl: `/api/clean-player?url=${encodeURIComponent(embedUrl)}&title=${encodeURIComponent(matchTitle || 'Live Event')}`,
     }));
 
     return streams;

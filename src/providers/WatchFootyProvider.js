@@ -8,6 +8,7 @@ class WatchFootyProvider extends BaseProvider {
     super(opts);
     this.name = 'WatchFooty';
     this.embedIndiaProvider = opts.embedIndiaProvider;
+    this.embedResolutionService = opts.embedResolutionService;
     // Hitting the /all endpoint to fetch 13+ sports instead of just football
     this.apiUrl = 'https://api.watchfooty.st/api/v1/matches/all';
     
@@ -171,13 +172,54 @@ class WatchFootyProvider extends BaseProvider {
                     }
                 } catch (e) {
                     console.error(`[WatchFootyProvider] Native extract failed for ${s.url}`, e.message);
-                    entityParams.externalUrl = `/watch?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                }
+              }
+
+              if (!resolvedViaIframe && !entityParams.url) {
+                if (this.embedResolutionService) {
+                  try {
+                    const resolved = await this.embedResolutionService.resolveToStreamEntity(
+                      s.url,
+                      entityParams.title,
+                      { providerName: 'WatchFooty', referer: 'https://watchfooty.st/' }
+                    );
+                    if (resolved) {
+                      streams.push(resolved);
+                    } else {
+                      entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                      streams.push(new StreamEntity(entityParams));
+                    }
+                  } catch (_) {
+                    entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
                     streams.push(new StreamEntity(entityParams));
+                  }
+                } else {
+                  entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                  streams.push(new StreamEntity(entityParams));
                 }
               }
             } else {
-              entityParams.externalUrl = `/watch?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
-              streams.push(new StreamEntity(entityParams));
+              if (this.embedResolutionService) {
+                try {
+                  const resolved = await this.embedResolutionService.resolveToStreamEntity(
+                    s.url,
+                    entityParams.title,
+                    { providerName: 'WatchFooty', referer: 'https://watchfooty.st/' }
+                  );
+                  if (resolved) {
+                    streams.push(resolved);
+                  } else {
+                    entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                    streams.push(new StreamEntity(entityParams));
+                  }
+                } catch (_) {
+                  entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                  streams.push(new StreamEntity(entityParams));
+                }
+              } else {
+                entityParams.externalUrl = `/api/clean-player?url=${encodeURIComponent(s.url)}&title=${encodeURIComponent(matchTitle || 'WatchFooty')}`;
+                streams.push(new StreamEntity(entityParams));
+              }
             }
           }
           idx++;

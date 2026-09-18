@@ -24,6 +24,7 @@ const { handleCatalog, handleMeta } = require('./catalog');
 const { handleStream } = require('./streams');
 const { PORT, BASE_URL, getRequestBaseUrl } = require('./config');
 const container = require('./container');
+const { isPrivateOrReservedHost } = require('./services/EmbedResolutionService');
 
 
 
@@ -281,6 +282,15 @@ app.get('/api/manifest', async (req, res) => {
 
   if (!targetUrl) return res.status(400).send('Missing url');
 
+  try {
+    const parsedTarget = new URL(targetUrl);
+    if (!['http:', 'https:'].includes(parsedTarget.protocol) || isPrivateOrReservedHost(parsedTarget.hostname)) {
+      return res.status(403).send('Forbidden: Invalid or private target URL');
+    }
+  } catch (_) {
+    return res.status(400).send('Invalid url');
+  }
+
   const cacheKey = `${targetUrl}|${referer}|${origin}`;
   const entry = manifestCacheGet(cacheKey);
   if (entry && entry.negative) {
@@ -516,6 +526,69 @@ app.get('/api/proxy-embed', async (req, res) => {
   }
 });
 
+// ─── /api/clean-player — Clean, Sanitized Player Proxy ───────────────────────
+// Serves upstream embed pages with full sanitization:
+// 1. Defuses "Remove sandbox" tripwires (window.open dummy window shim)
+// 2. Strips intrusive pop-up, pop-under, and ad-network scripts
+// 3. Injects <base href="..."> so player skins, CSS, and JS resolve properly
+// 4. Preserves legitimate video players (VideoJS, JW Player, Clappr, HLS.js, Dash.js)
+app.get('/api/clean-player', async (req, res) => {
+  const rawUrl = req.query.url;
+  const referer = req.query.referer || '';
+
+  if (!rawUrl) return res.status(400).send('Missing ?url parameter');
+
+  let parsed;
+  try {
+    let decoded = rawUrl;
+    try {
+      if (decoded.includes('%')) decoded = decodeURIComponent(decoded);
+    } catch (_) {}
+    parsed = new URL(decoded);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return res.status(400).send('Invalid URL protocol');
+    }
+  } catch {
+    return res.status(400).send('Invalid URL');
+  }
+
+  // SSRF guard
+  if (isPrivateOrReservedHost(parsed.hostname)) {
+    console.warn(`[clean-player] Blocked SSRF attempt for domain: ${parsed.hostname}`);
+    return res.status(403).send('Forbidden: private IP access is disallowed');
+  }
+
+  try {
+    const headers = {
+      'User-Agent': PROXY_EMBED_UA,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    if (referer) headers['Referer'] = referer;
+    else headers['Referer'] = parsed.origin + '/';
+
+    const upstream = await _safeFetch(parsed.toString(), {
+      headers,
+      timeoutMs: 12000
+    });
+
+    if (!upstream.ok) {
+      return res.status(upstream.status).send(`Upstream player returned HTTP ${upstream.status}`);
+    }
+
+    const html = await upstream.text();
+    const sanitizer = container.resolve('htmlSanitizerService');
+    const cleanHtml = sanitizer.sanitizePlayerHtml(html, parsed.toString());
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.removeHeader('X-Frame-Options');
+    res.send(cleanHtml);
+  } catch (err) {
+    console.error(`[clean-player] Failed for ${parsed.hostname}:`, err.message);
+    res.status(502).send('Failed to load clean stream: ' + err.message);
+  }
+});
 
 // Mount the HLS Video Proxy (routes to the internal resolver on port RESOLVER_PORT)
 app.use('/api', createProxyMiddleware({
@@ -567,12 +640,12 @@ app.use((req, res, next) => {
         const rewriteUrl = (url) => {
           if (!url || typeof url !== 'string') return url;
           // Relative URLs
-          if (url.startsWith('/img') || url.startsWith('/watch') || url.startsWith('/api/manifest') || url.startsWith('/logo')) {
+          if (url.startsWith('/img') || url.startsWith('/watch') || url.startsWith('/api/manifest') || url.startsWith('/api/clean-player') || url.startsWith('/logo')) {
             modified = true;
             return `${currentBaseUrl}${url}`;
           }
           // Absolute URLs with legacy/static base or localhost/LAN IP
-          const match = url.match(/^(?:https?:\/\/[^\/]+)(\/(?:img|watch|api\/manifest|logo)(?:[?\/].*)?)$/);
+          const match = url.match(/^(?:https?:\/\/[^\/]+)(\/(?:img|watch|api\/manifest|api\/clean-player|logo)(?:[?\/].*)?)$/);
           if (match) {
             modified = true;
             return `${currentBaseUrl}${match[1]}`;
@@ -1186,7 +1259,11 @@ app.get('/watch', (req, res) => {
       }
     } else {
       video.style.display = 'none';
-      iframe.src = targetUrl;
+      let iframeSource = targetUrl;
+      if (!iframeSource.includes('/api/clean-player') && !iframeSource.includes('/api/manifest')) {
+        iframeSource = '/api/clean-player?url=' + encodeURIComponent(targetUrl) + '&title=' + encodeURIComponent("${safeTitle}");
+      }
+      iframe.src = iframeSource;
       iframe.addEventListener('load', () => loader.classList.add('hidden'));
       setTimeout(() => loader.classList.add('hidden'), 6000);
 
