@@ -90,8 +90,23 @@ builder.defineStreamHandler(({ type, id, config })         => handleStream(type,
 
 const app = express();
 
+const {
+  manifestRateLimiter,
+  imageRateLimiter,
+  catalogRateLimiter,
+  streamRateLimiter
+} = require('./middleware/rateLimiter');
+
 app.set('trust proxy', true);
 app.use(cors());
+
+// Global HTTP Security Headers (OWASP ASVS / API Top 10)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
 // Serve the web debugger UI and Configuration Page
 app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));
@@ -104,48 +119,54 @@ app.get(['/configure', '/:config/configure'], (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'configure.html'));
 });
 
-app.get('/api/matches', (req, res) => {
+app.get('/api/matches', catalogRateLimiter, (req, res) => {
   const matches = container.resolve('cacheService').getMatches();
   res.json(matches);
 });
 
 // ─── Test Frontend Compatibility Endpoints ──────────────────────────────────
-app.get('/catalog/sports/all.json', async (req, res) => {
+app.get('/catalog/sports/all.json', catalogRateLimiter, async (req, res) => {
   try {
     const data = await handleCatalog('tv', 'nuvio_sports_all', {}, req.query);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json(data);
   } catch (err) {
-    res.status(500).json({ metas: [], error: err.message });
+    console.error('[Catalog Error - all]', err.message);
+    res.status(500).json({ metas: [], error: 'Failed to load catalog' });
   }
 });
 
-app.get('/catalog/sports/upcoming.json', async (req, res) => {
+app.get('/catalog/sports/upcoming.json', catalogRateLimiter, async (req, res) => {
   try {
     const data = await handleCatalog('tv', 'nuvio_sports_upcoming', {}, req.query);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json(data);
   } catch (err) {
-    res.status(500).json({ metas: [], error: err.message });
+    console.error('[Catalog Error - upcoming]', err.message);
+    res.status(500).json({ metas: [], error: 'Failed to load upcoming events' });
   }
 });
 
-app.get('/catalog/sports/live.json', async (req, res) => {
+app.get('/catalog/sports/live.json', catalogRateLimiter, async (req, res) => {
   try {
     const data = await handleCatalog('tv', 'nuvio_sports_live', {}, req.query);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json(data);
   } catch (err) {
-    res.status(500).json({ metas: [], error: err.message });
+    console.error('[Catalog Error - live]', err.message);
+    res.status(500).json({ metas: [], error: 'Failed to load live events' });
   }
 });
 
-app.get('/catalog/sports/:category.json', async (req, res) => {
+app.get('/catalog/sports/:category.json', catalogRateLimiter, async (req, res) => {
   try {
     const cat = req.params.category;
+    if (!/^[a-zA-Z0-9_-]+$/.test(cat)) {
+      return res.status(400).json({ metas: [], error: 'Invalid category format' });
+    }
     let catalogId = `nuvio_sports_${cat}`;
     if (cat === 'all') catalogId = 'nuvio_sports_all';
     else if (cat === 'live') catalogId = 'nuvio_sports_live';
@@ -156,20 +177,25 @@ app.get('/catalog/sports/:category.json', async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json(data);
   } catch (err) {
-    res.status(500).json({ metas: [], error: err.message });
+    console.error('[Catalog Error - category]', err.message);
+    res.status(500).json({ metas: [], error: 'Failed to load category catalog' });
   }
 });
 
-app.get('/stream/sports/:id.json', async (req, res) => {
+app.get('/stream/sports/:id.json', streamRateLimiter, async (req, res) => {
   try {
     const rawId = req.params.id || '';
+    if (!/^[a-zA-Z0-9._-]+$/.test(rawId)) {
+      return res.status(400).json({ streams: [], error: 'Invalid stream ID format' });
+    }
     const sportId = rawId.startsWith('nuvio_sport_') ? rawId : `nuvio_sport_${rawId}`;
     const data = await handleStream('tv', sportId, req.query);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.json(data);
   } catch (err) {
-    res.status(500).json({ streams: [], error: err.message });
+    console.error('[Stream Error]', err.message);
+    res.status(500).json({ streams: [], error: 'Failed to resolve streams' });
   }
 });
 
@@ -181,7 +207,7 @@ app.get('/stream/sports/:id.json', async (req, res) => {
 //                         placehold.co dependency.
 const imageService = require('./services/ImageService');
 
-app.get('/img/placeholder', (req, res) => {
+app.get('/img/placeholder', imageRateLimiter, (req, res) => {
   const svg = imageService.svgPlaceholder(req.query.text || 'Live Sports', req.query.color || '333333');
   res.setHeader('Content-Type', 'image/svg+xml');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -190,7 +216,7 @@ app.get('/img/placeholder', (req, res) => {
   res.send(svg);
 });
 
-app.get('/img', async (req, res) => {
+app.get('/img', imageRateLimiter, async (req, res) => {
   const text = req.query.text || 'Live Sports';
   const color = req.query.color || '333333';
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -275,10 +301,10 @@ async function fetchUpstreamManifest(targetUrl, referer, origin) {
   return await result.text();
 }
 
-app.get('/api/manifest', async (req, res) => {
+app.get('/api/manifest', manifestRateLimiter, async (req, res) => {
   const targetUrl = req.query.url;
-  const referer = req.query.referer || 'https://embed.st/';
-  const origin = req.query.origin || 'https://embed.st';
+  const referer = String(req.query.referer || 'https://embed.st/').replace(/[\r\n]/g, '').trim();
+  const origin = String(req.query.origin || 'https://embed.st').replace(/[\r\n]/g, '').trim();
 
   if (!targetUrl) return res.status(400).send('Missing url');
 
@@ -393,8 +419,8 @@ app.get('/api/manifest', async (req, res) => {
       return res.status(404).send('Stream not found or expired');
     }
     console.error('[ManifestProxy] Error:', err.message);
-    manifestCacheSetNegative(cacheKey, 502, 'Manifest proxy error: ' + err.message);
-    return res.status(502).send('Manifest proxy error: ' + err.message);
+    manifestCacheSetNegative(cacheKey, 502, 'Manifest proxy error');
+    return res.status(502).send('Manifest proxy error');
   }
 });
 
@@ -478,9 +504,9 @@ function sanitizeEmbedHtml(html) {
   return clean;
 }
 
-app.get('/api/proxy-embed', async (req, res) => {
+app.get('/api/proxy-embed', manifestRateLimiter, async (req, res) => {
   const rawUrl = req.query.url;
-  const referer = req.query.referer || '';
+  const referer = String(req.query.referer || '').replace(/[\r\n]/g, '').trim();
 
   if (!rawUrl) return res.status(400).json({ error: 'Missing ?url parameter' });
 
@@ -495,9 +521,9 @@ app.get('/api/proxy-embed', async (req, res) => {
   }
 
   // SSRF protection: reject any domain not in the allowlist
-  if (!ALLOWED_EMBED_DOMAINS.has(parsed.hostname)) {
+  if (!ALLOWED_EMBED_DOMAINS.has(parsed.hostname) || isPrivateOrReservedHost(parsed.hostname)) {
     console.warn(`[proxy-embed] Blocked SSRF attempt for domain: ${parsed.hostname}`);
-    return res.status(403).json({ error: `Domain ${parsed.hostname} is not in the allowed embed domain list.` });
+    return res.status(403).json({ error: `Domain ${parsed.hostname} is not allowed.` });
   }
 
   try {
@@ -522,7 +548,7 @@ app.get('/api/proxy-embed', async (req, res) => {
     res.send(sanitizedHtml);
   } catch (err) {
     console.error(`[proxy-embed] Fetch failed for ${parsed.hostname}: ${err.message}`);
-    res.status(502).json({ error: 'Failed to fetch embed page', detail: err.message });
+    res.status(502).json({ error: 'Failed to fetch embed page' });
   }
 });
 
@@ -532,9 +558,9 @@ app.get('/api/proxy-embed', async (req, res) => {
 // 2. Strips intrusive pop-up, pop-under, and ad-network scripts
 // 3. Injects <base href="..."> so player skins, CSS, and JS resolve properly
 // 4. Preserves legitimate video players (VideoJS, JW Player, Clappr, HLS.js, Dash.js)
-app.get('/api/clean-player', async (req, res) => {
+app.get('/api/clean-player', manifestRateLimiter, async (req, res) => {
   const rawUrl = req.query.url;
-  const referer = req.query.referer || '';
+  const referer = String(req.query.referer || '').replace(/[\r\n]/g, '').trim();
 
   if (!rawUrl) return res.status(400).send('Missing ?url parameter');
 
@@ -586,7 +612,7 @@ app.get('/api/clean-player', async (req, res) => {
     res.send(cleanHtml);
   } catch (err) {
     console.error(`[clean-player] Failed for ${parsed.hostname}:`, err.message);
-    res.status(502).send('Failed to load clean stream: ' + err.message);
+    res.status(502).send('Failed to load clean stream');
   }
 });
 
@@ -1204,7 +1230,7 @@ app.get('/watch', (req, res) => {
     const iframe = document.getElementById('player');
     const video = document.getElementById('video-player');
     const p2pStatus = document.getElementById('p2p-status');
-    const targetUrl = "${safeUrl}";
+    const targetUrl = ${JSON.stringify(safeUrl)};
     const isM3u8 = targetUrl.includes('.m3u8');
     
     // Video streams play DIRECT from the upstream CDN (no server-side relay).
@@ -1261,7 +1287,7 @@ app.get('/watch', (req, res) => {
       video.style.display = 'none';
       let iframeSource = targetUrl;
       if (!iframeSource.includes('/api/clean-player') && !iframeSource.includes('/api/manifest')) {
-        iframeSource = '/api/clean-player?url=' + encodeURIComponent(targetUrl) + '&title=' + encodeURIComponent("${safeTitle}");
+        iframeSource = '/api/clean-player?url=' + encodeURIComponent(targetUrl) + '&title=' + encodeURIComponent(${JSON.stringify(safeTitle)});
       }
       iframe.src = iframeSource;
       iframe.addEventListener('load', () => loader.classList.add('hidden'));

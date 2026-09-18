@@ -28,6 +28,8 @@ const cache = new Map();     // url -> { buffer, contentType, expiresAt }
 const inFlight = new Map();  // url -> Promise
 const negatives = new Map(); // url -> expiry ts (recently failed/slow sources)
 
+const { isPrivateOrReservedHost } = require('./EmbedResolutionService');
+
 const NEG_TTL_MS = 60 * 1000;
 
 function normalizeUrl(url) {
@@ -36,6 +38,12 @@ function normalizeUrl(url) {
   if (!u) return null;
   if (u.startsWith('//')) u = 'https:' + u;
   if (!/^https?:\/\//i.test(u)) return null;
+  try {
+    const parsed = new URL(u);
+    if (isPrivateOrReservedHost(parsed.hostname)) return null;
+  } catch (_) {
+    return null;
+  }
   return u;
 }
 

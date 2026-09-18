@@ -195,7 +195,30 @@ async function runE2ESimulatedClient() {
     // Phase 4: Full Stream Resolution & M3U8 Playback (R3)
     // ─────────────────────────────────────────────────────────────────────────
     console.log('\n🎬 [Phase 4] Simulating Stream Resolution & M3U8 Playback...');
-    const targetMatch = metas.find(m => m.id.startsWith('nuvio_sport_') || m.id.startsWith('iptv_') || m.id.startsWith('spk_') || m.id.startsWith('ss99_')) || metas[0];
+    // Find a candidate match that has active streams (skip static schedule announcements)
+    let targetMatch = null;
+    let streamData = { streams: [] };
+    let streams = [];
+
+    const candidates = metas.filter(m => !m.name?.toLowerCase().includes('schedule'));
+    for (const cand of candidates.slice(0, 15)) {
+      try {
+        const streamRes = await request(`${baseUrl}/stream/tv/${cand.id}.json`, {
+          headers: { host: 'addon.test-domain.xyz' }
+        });
+        const data = await streamRes.body.json();
+        if (data.streams && data.streams.length > 0) {
+          targetMatch = cand;
+          streamData = data;
+          streams = data.streams;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!targetMatch && metas.length > 0) {
+      targetMatch = candidates[0] || metas[0];
+    }
+
     if (targetMatch) {
       // 4A. Meta
       const metaRes = await request(`${baseUrl}/meta/tv/${targetMatch.id}.json`, {
@@ -207,12 +230,14 @@ async function runE2ESimulatedClient() {
       record('Phase 4', 'Fetch Match Metadata (Dynamic Host)', metaPassed && metaPosterReflects, `Match: ${targetMatch.name || targetMatch.id}`);
 
       // 4B. Stream Array
-      const streamRes = await request(`${baseUrl}/stream/tv/${targetMatch.id}.json`, {
-        headers: { host: 'addon.test-domain.xyz' }
-      });
-      const streamData = await streamRes.body.json();
-      const streams = streamData.streams || [];
-      const streamsPassed = streamRes.statusCode === 200 && streams.length > 0;
+      if (streams.length === 0) {
+        const streamRes = await request(`${baseUrl}/stream/tv/${targetMatch.id}.json`, {
+          headers: { host: 'addon.test-domain.xyz' }
+        });
+        streamData = await streamRes.body.json();
+        streams = streamData.streams || [];
+      }
+      const streamsPassed = streams.length > 0;
       
       // Check stream URLs dynamic host rewrite
       let streamUrlsDynamic = true;

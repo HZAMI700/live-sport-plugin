@@ -16,34 +16,136 @@ const EmbedExtractorChain = require('./EmbedExtractorChain');
 const StreamEntity = require('../domain/StreamEntity');
 const { BASE_URL } = require('../config');
 
-// SSRF Guard: reject private IP ranges & loopback addresses
+// SSRF Guard: reject private IP ranges, loopback addresses, CGNAT, metadata & reserved hosts
 function isPrivateOrReservedHost(hostname) {
   if (!hostname || typeof hostname !== 'string') return true;
-  const h = hostname.toLowerCase().trim();
+  let h = hostname.toLowerCase().trim();
 
-  // Localhost and loopbacks
-  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0') return true;
-
-  // Cloud metadata endpoint
-  if (h === '169.254.169.254' || h.startsWith('169.254.')) return true;
-
-  // IPv4 private ranges (RFC 1918)
-  // 10.0.0.0/8
-  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
-  // 172.16.0.0/12
-  const m172 = h.match(/^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
-  if (m172) {
-    const oct = parseInt(m172[1], 10);
-    if (oct >= 16 && oct <= 31) return true;
+  // Strip IPv6 enclosing brackets e.g. [::1] -> ::1
+  if (h.startsWith('[') && h.endsWith(']')) {
+    h = h.slice(1, -1);
   }
-  // 192.168/16
-  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
 
-  // IPv6 unique local and link local
-  if (h.startsWith('fc00:') || h.startsWith('fd00:') || h.startsWith('fe80:')) return true;
+  // Localhost & single-label hostnames
+  if (h === 'localhost' || h === '0.0.0.0') return true;
 
-  // Must have a valid domain format or valid public IP
-  if (!h.includes('.') && !h.includes(':')) return true;
+  // Prohibited internal and local domain extensions
+  if (
+    h.endsWith('.localhost') ||
+    h.endsWith('.local') ||
+    h.endsWith('.internal') ||
+    h.endsWith('.lan') ||
+    h.endsWith('.home') ||
+    h.endsWith('.arpa') ||
+    h.endsWith('.invalid')
+  ) {
+    return true;
+  }
+
+  // IPv6 checks
+  if (h.includes(':')) {
+    // Unspecified & loopback
+    if (h === '::1' || h === '::' || /^0+(?::0+)*:0*1$/.test(h)) return true;
+
+    // Unique Local (fc00::/7)
+    if (h.startsWith('fc') || h.startsWith('fd')) return true;
+
+    // Link Local (fe80::/10 -> fe8, fe9, fea, feb)
+    if (/^fe[89ab]/i.test(h)) return true;
+
+    // Multicast (ff00::/8)
+    if (h.startsWith('ff')) return true;
+
+    // Documentation (2001:db8::/32)
+    if (h.startsWith('2001:db8:') || h.startsWith('2001:0db8:')) return true;
+
+    // IPv4-mapped IPv6 (::ffff:192.168.1.1 or ::ffff:7f00:1)
+    if (h.startsWith('::ffff:')) {
+      const mapped = h.replace('::ffff:', '');
+      return isPrivateOrReservedHost(mapped);
+    }
+
+    return false;
+  }
+
+  // Non-IPv6 hostnames: must contain at least one dot (prevent intranet single-word hosts like 'database', 'metadata')
+  if (!h.includes('.')) return true;
+
+  // Check if it's an IP address or contains numeric/hex segments
+  // Normal IPv4 has 4 decimal octets: d.d.d.d
+  const ipv4Match = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const octets = [
+      parseInt(ipv4Match[1], 10),
+      parseInt(ipv4Match[2], 10),
+      parseInt(ipv4Match[3], 10),
+      parseInt(ipv4Match[4], 10)
+    ];
+
+    // Check octet bounds (0-255) and reject octal with leading zeroes (e.g. 0177)
+    for (let i = 1; i <= 4; i++) {
+      const raw = ipv4Match[i];
+      if (raw.length > 1 && raw.startsWith('0')) return true; // Octal attempt
+      if (octets[i - 1] > 255) return true;
+    }
+
+    const [a, b, c, d] = octets;
+
+    // 0.0.0.0/8 (Current network)
+    if (a === 0) return true;
+
+    // 10.0.0.0/8 (Private RFC 1918)
+    if (a === 10) return true;
+
+    // 100.64.0.0/10 (Shared Address Space / CGNAT RFC 6598: 100.64.0.0 - 100.127.255.255)
+    if (a === 100 && b >= 64 && b <= 127) return true;
+
+    // 127.0.0.0/8 (Loopback)
+    if (a === 127) return true;
+
+    // 169.254.0.0/16 (Link Local & Cloud Metadata RFC 3927)
+    if (a === 169 && b === 254) return true;
+
+    // 172.16.0.0/12 (Private RFC 1918: 172.16.0.0 - 172.31.255.255)
+    if (a === 172 && b >= 16 && b <= 31) return true;
+
+    // 192.0.0.0/24 (IETF Protocol Assignments)
+    if (a === 192 && b === 0 && c === 0) return true;
+
+    // 192.0.2.0/24 (Documentation TEST-NET-1 RFC 5737)
+    if (a === 192 && b === 0 && c === 2) return true;
+
+    // 192.168/16 (Private RFC 1918)
+    if (a === 192 && b === 168) return true;
+
+    // 198.18.0.0/15 (Benchmarking RFC 2544: 198.18.0.0 - 198.19.255.255)
+    if (a === 198 && (b === 18 || b === 19)) return true;
+
+    // 198.51.100.0/24 (Documentation TEST-NET-2 RFC 5737)
+    if (a === 198 && b === 51 && c === 100) return true;
+
+    // 203.0.113.0/24 (Documentation TEST-NET-3 RFC 5737)
+    if (a === 203 && b === 0 && c === 113) return true;
+
+    // 224.0.0.0/4 (Multicast RFC 5771) & 240.0.0.0/4 (Reserved / Broadcast 255.255.255.255)
+    if (a >= 224) return true;
+
+    return false;
+  }
+
+  // Reject alternative IP representations:
+  // e.g. hexadecimal (0x7f000001), octal, shortened IPs (127.1), pure integer IPs (2130706433)
+  // If the last label is purely numeric or hex, it is an invalid domain or non-canonical IP
+  const labels = h.split('.');
+  const lastLabel = labels[labels.length - 1];
+  if (/^(?:\d+|0x[0-9a-f]+)$/i.test(lastLabel)) {
+    return true; // Not a valid domain TLD and not a standard 4-octet IPv4
+  }
+
+  // Reject labels with hex prefix or invalid domain characters
+  if (labels.some(l => /^0x/i.test(l) || !/^[a-z0-9_-]+$/i.test(l))) {
+    return true;
+  }
 
   return false;
 }

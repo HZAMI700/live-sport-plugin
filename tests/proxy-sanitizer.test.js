@@ -86,11 +86,42 @@ describe('EmbedResolutionService SSRF Guard', () => {
     expect(isPrivateOrReservedHost('::1')).toBe(true);
   });
 
-  test('allows legitimate public streaming domains', () => {
+  test('blocks Carrier-Grade NAT, documentation IPs, multicast, and broadcast', () => {
+    // CGNAT RFC 6598 (100.64.0.0/10)
+    expect(isPrivateOrReservedHost('100.64.0.1')).toBe(true);
+    expect(isPrivateOrReservedHost('100.127.255.254')).toBe(true);
+    expect(isPrivateOrReservedHost('100.128.0.1')).toBe(false);
+
+    // Documentation IPs RFC 5737
+    expect(isPrivateOrReservedHost('192.0.2.1')).toBe(true);
+    expect(isPrivateOrReservedHost('198.51.100.1')).toBe(true);
+    expect(isPrivateOrReservedHost('203.0.113.1')).toBe(true);
+
+    // 0.0.0.0/8, Multicast & Broadcast
+    expect(isPrivateOrReservedHost('0.0.0.0')).toBe(true);
+    expect(isPrivateOrReservedHost('224.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedHost('255.255.255.255')).toBe(true);
+  });
+
+  test('blocks obfuscated, hex, octal, shortened, and internal hosts', () => {
+    expect(isPrivateOrReservedHost('2130706433')).toBe(true);
+    expect(isPrivateOrReservedHost('0x7f000001')).toBe(true);
+    expect(isPrivateOrReservedHost('0177.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedHost('127.1')).toBe(true);
+    expect(isPrivateOrReservedHost('metadata.google.internal')).toBe(true);
+    expect(isPrivateOrReservedHost('router.local')).toBe(true);
+    expect(isPrivateOrReservedHost('intranet')).toBe(true);
+    expect(isPrivateOrReservedHost('::ffff:127.0.0.1')).toBe(true);
+    expect(isPrivateOrReservedHost('::ffff:192.168.1.1')).toBe(true);
+  });
+
+  test('allows legitimate public streaming domains and public IPs', () => {
     expect(isPrivateOrReservedHost('embed.st')).toBe(false);
     expect(isPrivateOrReservedHost('embedindia.st')).toBe(false);
     expect(isPrivateOrReservedHost('streamed.pk')).toBe(false);
     expect(isPrivateOrReservedHost('watchfooty.st')).toBe(false);
+    expect(isPrivateOrReservedHost('8.8.8.8')).toBe(false);
+    expect(isPrivateOrReservedHost('1.1.1.1')).toBe(false);
   });
 
   test('validateUrl rejects non-http protocols and private hosts', () => {
@@ -98,6 +129,55 @@ describe('EmbedResolutionService SSRF Guard', () => {
     expect(resolver.validateUrl('javascript:alert(1)').valid).toBe(false);
     expect(resolver.validateUrl('http://127.0.0.1:8080/admin').valid).toBe(false);
     expect(resolver.validateUrl('http://169.254.169.254/latest/meta-data').valid).toBe(false);
+    expect(resolver.validateUrl('http://100.64.0.1/status').valid).toBe(false);
     expect(resolver.validateUrl('https://embed.st/embed/admin/123').valid).toBe(true);
+  });
+});
+
+describe('ImageService SSRF Mitigation', () => {
+  const imageService = require('../src/services/ImageService');
+
+  test('normalizeUrl rejects private, loopback, and cloud metadata targets', () => {
+    expect(imageService.normalizeUrl('http://127.0.0.1:8080/avatar.jpg')).toBeNull();
+    expect(imageService.normalizeUrl('http://169.254.169.254/latest/meta-data')).toBeNull();
+    expect(imageService.normalizeUrl('http://10.0.0.5/logo.png')).toBeNull();
+    expect(imageService.normalizeUrl('http://metadata.google.internal/computeMetadata/v1')).toBeNull();
+  });
+
+  test('normalizeUrl permits safe public image URLs', () => {
+    expect(imageService.normalizeUrl('https://upload.wikimedia.org/wikipedia/commons/test.png')).toBe(
+      'https://upload.wikimedia.org/wikipedia/commons/test.png'
+    );
+  });
+});
+
+describe('RateLimiter Middleware', () => {
+  const { createRateLimiter } = require('../src/middleware/rateLimiter');
+
+  test('enforces threshold and returns 429 when max requests are exceeded', () => {
+    const limiter = createRateLimiter({ windowMs: 10000, max: 2, message: 'Too many requests' });
+    const req = { ip: '198.51.100.99', headers: {}, path: '/api/test.json' };
+    let status = 200;
+    let jsonBody = null;
+    const res = {
+      setHeader: jest.fn(),
+      status: (s) => { status = s; return { json: (b) => { jsonBody = b; } }; }
+    };
+    let nextCalled = 0;
+    const next = () => { nextCalled += 1; };
+
+    // Request 1: allowed
+    limiter(req, res, next);
+    expect(nextCalled).toBe(1);
+
+    // Request 2: allowed
+    limiter(req, res, next);
+    expect(nextCalled).toBe(2);
+
+    // Request 3: rate limited
+    limiter(req, res, next);
+    expect(nextCalled).toBe(2);
+    expect(status).toBe(429);
+    expect(jsonBody).toEqual({ error: 'Too many requests' });
   });
 });
