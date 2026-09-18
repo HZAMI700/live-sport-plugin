@@ -308,8 +308,18 @@ class MatchAggregator {
       }
     });
 
-    // Filter out matches that are already over (kickoff was > 24 hours ago)
+    // Filter out matches that are already over (kickoff was > 24 hours ago) or dummy "vs" fixtures
     const activeMatches = finalMatches.filter(match => {
+      // 1. Title validation
+      const rawTitle = String(match.title || '').trim();
+      const cleanTitle = rawTitle.replace(/^(🔴 LIVE:|⏱️|📺)\s*/i, '').trim().toLowerCase();
+      if (!cleanTitle || cleanTitle === 'vs' || cleanTitle === 'vs.' || cleanTitle === 'v' || cleanTitle.length < 3) {
+        return false;
+      }
+      if ((cleanTitle.startsWith('vs ') || cleanTitle.endsWith(' vs')) && cleanTitle.length <= 4) {
+        return false;
+      }
+
       let kickoff = 0;
       if (match.date) {
         const parsed = Number(match.date);

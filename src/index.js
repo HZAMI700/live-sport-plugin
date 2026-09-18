@@ -412,6 +412,62 @@ const ALLOWED_EMBED_DOMAINS = new Set([
 
 const PROXY_EMBED_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
 
+function sanitizeEmbedHtml(html) {
+  if (!html || typeof html !== 'string') return '';
+  let clean = html;
+
+  // 1. Strip script tags referencing known popup / popunder / ad networks
+  const adDomains = [
+    'popads', 'adsterra', 'exoclick', 'propellerads', 'monetag', 'hilltopads',
+    'clickadu', 'alwingulla', 'trafficjunky', 'juicyads', 'coinhive', 'syndication',
+    'outbrain', 'taboola', 'betting', 'richaudience', 'doubleclick', 'googlesyndication',
+    'adtelligent', 'adnxs', 'smartadserver', 'popcash', 'adcash', 'admaven', 'adx'
+  ];
+  const adRegex = new RegExp(`<script[^>]*src=["'][^"']*(${adDomains.join('|')})[^"']*["'][^>]*>\\s*<\\/script>`, 'gi');
+  clean = clean.replace(adRegex, '<!-- blocked ad script -->');
+
+  // 2. Neutralize inline window.open and popup triggers inside scripts
+  clean = clean.replace(/\bwindow\.open\s*\(/g, '(function(){return null;})(');
+  clean = clean.replace(/\bopen\s*\(\s*["']http/g, '(function(){return null;})("http');
+
+  // 3. Strip meta refresh redirect attempts
+  clean = clean.replace(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*>/gi, '');
+
+  // 4. Inject head pop-under defusal script
+  const adDefusalScript = `
+<script>
+(function() {
+  const dummyWin = { focus: function(){}, close: function(){}, closed: true, postMessage: function(){} };
+  window.open = function() { return dummyWin; };
+  window.alert = function() {};
+  window.confirm = function() { return false; };
+  window.prompt = function() { return null; };
+  window.onbeforeunload = null;
+  
+  // Intercept clickjacking overlays & rogue popunder anchors
+  document.addEventListener('click', function(e) {
+    let el = e.target;
+    while (el && el !== document.body) {
+      if (el.tagName === 'A' && (el.target === '_blank' || (el.href && !el.href.includes(window.location.hostname)))) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+      el = el.parentElement;
+    }
+  }, true);
+})();
+</script>
+`;
+  if (clean.includes('<head>')) {
+    clean = clean.replace('<head>', '<head>' + adDefusalScript);
+  } else {
+    clean = adDefusalScript + clean;
+  }
+
+  return clean;
+}
+
 app.get('/api/proxy-embed', async (req, res) => {
   const rawUrl = req.query.url;
   const referer = req.query.referer || '';
@@ -449,10 +505,11 @@ app.get('/api/proxy-embed', async (req, res) => {
     });
 
     const html = await upstream.text();
+    const sanitizedHtml = sanitizeEmbedHtml(html);
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(html);
+    res.send(sanitizedHtml);
   } catch (err) {
     console.error(`[proxy-embed] Fetch failed for ${parsed.hostname}: ${err.message}`);
     res.status(502).json({ error: 'Failed to fetch embed page', detail: err.message });
@@ -948,6 +1005,60 @@ app.get('/watch', (req, res) => {
   <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-core@latest/build/p2p-media-loader-core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/p2p-media-loader-hlsjs@latest/build/p2p-media-loader-hlsjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+  <!-- 🛡️ STREAM GUARD: Pop-under & Clickjacking Neutralization Engine -->
+  <script>
+    (function() {
+      const dummyWindow = { focus: () => {}, close: () => {}, blur: () => {}, postMessage: () => {}, closed: true };
+      window.open = function() {
+        console.log('[AdShield] Blocked pop-under window.open()');
+        return dummyWindow;
+      };
+      window.alert = function() {};
+      window.confirm = function() { return false; };
+      window.prompt = function() { return null; };
+      window.onbeforeunload = null;
+
+      // Intercept rogue ad clicks & redirects in capture phase
+      document.addEventListener('click', function(e) {
+        let el = e.target;
+        while (el && el !== document.body) {
+          if (el.tagName === 'A') {
+            const href = el.getAttribute('href') || '';
+            if (el.target === '_blank' || (href.startsWith('http') && !href.includes(window.location.hostname))) {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[AdShield] Neutralized ad link click to:', href);
+              return false;
+            }
+          }
+          el = el.parentElement;
+        }
+      }, true);
+
+      // Detect and eliminate transparent ad overlays dynamically
+      const observer = new MutationObserver(function(mutations) {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType === 1) {
+              const tag = node.tagName.toLowerCase();
+              if (tag === 'iframe' && node.id !== 'player' && node.id !== 'video-player') {
+                node.remove();
+              } else if (node.id !== 'fs-btn' && node.id !== 'topbar' && node.id !== 'loader' && node.id !== 'p2p-status' && node.id !== 'embed-shield') {
+                try {
+                  const s = window.getComputedStyle(node);
+                  if ((s.position === 'fixed' || s.position === 'absolute') && parseInt(s.zIndex, 10) >= 50) {
+                    node.remove();
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
 </head>
 <body>
   <div id="loader">
@@ -967,8 +1078,12 @@ app.get('/watch', (req, res) => {
 
   <div id="p2p-status">P2P Active: 0 Peers</div>
 
+  <div id="embed-shield" style="position:fixed; inset:0; z-index:3; cursor:pointer; background:transparent;"></div>
+
   <iframe
     id="player"
+    sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
+    referrerpolicy="no-referrer"
     allowfullscreen
     allow="autoplay; encrypted-media; fullscreen; picture-in-picture; accelerometer; gyroscope"
     scrolling="no"
@@ -1074,6 +1189,17 @@ app.get('/watch', (req, res) => {
       iframe.src = targetUrl;
       iframe.addEventListener('load', () => loader.classList.add('hidden'));
       setTimeout(() => loader.classList.add('hidden'), 6000);
+
+      const embedShield = document.getElementById('embed-shield');
+      if (embedShield) {
+        const dismissShield = () => {
+          embedShield.remove();
+          console.log('[AdShield] Shield interaction absorbed');
+        };
+        embedShield.addEventListener('click', dismissShield, { once: true });
+        embedShield.addEventListener('touchstart', dismissShield, { once: true, passive: true });
+        setTimeout(() => { if (embedShield && embedShield.parentNode) embedShield.remove(); }, 6000);
+      }
     }
   </script>
 </body>

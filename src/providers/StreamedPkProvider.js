@@ -81,6 +81,16 @@ class StreamedPkProvider extends BaseProvider {
         for (const item of allData) {
           if (!item.id || !item.title) continue;
 
+          // Filter out dummy vs placeholders
+          const rawTitle = String(item.title || '').trim();
+          const cleanTitle = rawTitle.replace(/^(🔴 LIVE:|⏱️|📺)\s*/i, '').trim().toLowerCase();
+          if (!cleanTitle || cleanTitle === 'vs' || cleanTitle === 'vs.' || cleanTitle === 'v' || cleanTitle.length < 3) {
+            continue;
+          }
+          if ((cleanTitle.startsWith('vs ') || cleanTitle.endsWith(' vs')) && cleanTitle.length <= 4) {
+            continue;
+          }
+
           const is247Channel = !item.date || Number(item.date) <= 0;
           const isGenuinelyLive = is247Channel || liveVerifiedIds.has(item.id) || (item.sources || []).some(s => liveVerifiedSourceIds.has(s.id));
           const isUpcoming = !is247Channel && item.date && Number(item.date) > now;

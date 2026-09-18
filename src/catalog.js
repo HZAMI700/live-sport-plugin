@@ -243,7 +243,11 @@ async function handleCatalog(type, id, extra, config) {
   
   // Use CacheService instead of hitting APIs on demand
   const cacheService = container.resolve('cacheService');
-  const matches = cacheService.getMatches();
+  const rawMatches = cacheService.getMatches();
+  const matches = rawMatches.filter(m => {
+    const t = String(m.title || '').replace(/^(🔴 LIVE:|⏱️|📺)\s*/i, '').trim().toLowerCase();
+    return t && t !== 'vs' && t !== 'vs.' && t !== 'v' && t.length >= 3 && !((t.startsWith('vs ') || t.endsWith(' vs')) && t.length <= 4);
+  });
   
   let filteredMatches = matches;
 
