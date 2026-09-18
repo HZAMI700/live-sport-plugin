@@ -278,7 +278,7 @@ async function handleCatalog(type, id, extra, config) {
         if (categoryMatch === 'cricket' && titleLower.includes('cricket')) return true;
         if (categoryMatch === 'tennis' && titleLower.includes('tennis')) return true;
         if (categoryMatch === 'motorsport' && (titleLower.includes('f1') || titleLower.includes('racing') || titleLower.includes('moto') || titleLower.includes('motorsport'))) return true;
-        if (categoryMatch === 'basketball' && (titleLower.includes('nba') || titleLower.includes('basketball'))) return true;
+        if (categoryMatch === 'basketball' && (titleLower.includes('nba') || titleLower.includes('basketball') || titleLower.includes('wnba') || titleLower.includes('euroleague'))) return true;
         if (categoryMatch === 'football' && (titleLower.includes('football') || titleLower.includes('soccer') || titleLower.includes('golazo') || titleLower.includes('laliga') || titleLower.includes('premier league') || titleLower.includes('bein sports'))) return true;
         if (categoryMatch === 'rugby' && (titleLower.includes('rugby') || titleLower.includes('league') || titleLower.includes('nrl'))) return true;
         if (categoryMatch === 'american_football' && (titleLower.includes('nfl') || titleLower.includes('american football'))) return true;

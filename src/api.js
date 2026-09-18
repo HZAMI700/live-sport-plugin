@@ -3,26 +3,53 @@ const { request } = require('undici');
 const STREAMED_API = 'https://streamed.pk/api';
 const STREAMFREE_API = 'https://streamfree.top/streams';
 
-function normalizeCategory(cat) {
+function normalizeCategory(cat, title = '', league = '') {
   if (!cat) return 'other';
   if (typeof cat === 'object' && !Array.isArray(cat)) {
     cat = cat.name || cat.title || 'other';
   }
-  cat = String(cat).toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (cat.includes('soccer') || cat.includes('football')) return 'football';
-  if (cat.includes('motor') || cat.includes('racing') || cat.includes('cycling') || cat.includes('f1')) return 'motorsport';
-  if (cat.includes('americanfootball') || cat.includes('afl') || cat.includes('gridiron') || cat.includes('nfl')) return 'american_football';
-  if (cat.includes('fight') || cat.includes('mma') || cat.includes('boxing') || cat.includes('wrestling') || cat.includes('knuckle') || cat.includes('ufc')) return 'mma';
-  if (cat.includes('basketball') || cat.includes('nba')) return 'basketball';
-  if (cat.includes('golf')) return 'golf';
-  if (cat.includes('rugby')) return 'rugby';
-  if (cat.includes('cricket')) return 'cricket';
-  if (cat.includes('tennis')) return 'tennis';
-  if (cat.includes('hockey')) return 'hockey';
-  if (cat.includes('baseball')) return 'baseball';
-  if (cat.includes('darts')) return 'darts';
-  if (cat.includes('liveshow') || cat.includes('uncategorized')) return 'other';
-  return cat;
+  const cleanCat = String(cat || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const cleanTitle = String(title || '').toLowerCase();
+  const cleanLeague = String(league || '').toLowerCase();
+
+  // 1. AMERICAN FOOTBALL (NFL, NCAA football) MUST come before soccer/football!
+  if (
+    cleanTitle.includes('nfl') || cleanTitle.includes('american football') ||
+    cleanLeague.includes('nfl') || cleanLeague.includes('ncaa division 1 football') ||
+    cleanCat.includes('americanfootball') || cleanCat.includes('nfl') ||
+    cleanCat.includes('afl') || cleanCat.includes('gridiron')
+  ) {
+    return 'american_football';
+  }
+
+  // 2. BASKETBALL (NBA, WNBA, EuroLeague)
+  if (
+    cleanTitle.includes('wnba') || cleanTitle.includes('nba') ||
+    cleanLeague.includes('wnba') || cleanLeague.includes('nba') ||
+    cleanLeague.includes('euroleague') || cleanLeague.includes('basketball') ||
+    cleanCat.includes('basketball') || cleanCat.includes('nba') || cleanCat.includes('wnba')
+  ) {
+    return 'basketball';
+  }
+
+  // 3. SOCCER / ASSOCIATION FOOTBALL
+  if (cleanCat.includes('soccer') || cleanCat.includes('football')) return 'football';
+
+  // 4. MOTORSPORT / F1
+  if (cleanCat.includes('motor') || cleanCat.includes('racing') || cleanCat.includes('cycling') || cleanCat.includes('f1') || cleanTitle.includes('f1') || cleanTitle.includes('formula 1') || cleanTitle.includes('nascar') || cleanTitle.includes('motogp')) return 'motorsport';
+
+  // 5. COMBAT / MMA / UFC
+  if (cleanCat.includes('fight') || cleanCat.includes('mma') || cleanCat.includes('boxing') || cleanCat.includes('wrestling') || cleanCat.includes('knuckle') || cleanCat.includes('ufc') || cleanTitle.includes('ufc') || cleanTitle.includes('wwe')) return 'mma';
+
+  if (cleanCat.includes('golf')) return 'golf';
+  if (cleanCat.includes('rugby')) return 'rugby';
+  if (cleanCat.includes('cricket')) return 'cricket';
+  if (cleanCat.includes('tennis')) return 'tennis';
+  if (cleanCat.includes('hockey') || cleanTitle.includes('nhl')) return 'hockey';
+  if (cleanCat.includes('baseball') || cleanCat.includes('mlb') || cleanTitle.includes('mlb')) return 'baseball';
+  if (cleanCat.includes('darts')) return 'darts';
+  if (cleanCat.includes('liveshow') || cleanCat.includes('uncategorized')) return 'other';
+  return cleanCat || 'other';
 }
 
 function normalizeStr(str) {
@@ -89,7 +116,7 @@ async function getAllMatches() {
             unifiedEvents.push({
               id: id,
               title: s.name,
-              category: normalizeCategory(category),
+              category: normalizeCategory(category, s.name, s.league),
               date: (s.match_timestamp * 1000).toString(), 
               popular: (s.viewers || 0) > 100 ? '1' : '0',
               league: s.league,
@@ -117,7 +144,7 @@ async function getAllMatches() {
         const pkEvent = {
           id: s.id,
           title: s.title,
-          category: normalizeCategory(s.category),
+          category: normalizeCategory(s.category, s.title, ''),
           date: s.date,
           popular: s.popular,
           sources: s.sources || [],
@@ -173,7 +200,7 @@ async function getAllMatches() {
         const binEvent = {
           id: `bintv_${index}_${normalizeStr(title).substring(0, 10)}`,
           title: title,
-          category: normalizeCategory(s.category),
+          category: normalizeCategory(s.category, title),
           date: Date.now().toString(), // BinTV JSON doesn't provide precise unix timestamps, just 'Live' string
           popular: '0',
           sources: bintvSources,
@@ -221,7 +248,7 @@ async function getAllMatches() {
         const extraEvent = {
           id: `extra_${index}_${normalizeStr(title).substring(0, 10)}`,
           title: title,
-          category: 'other', // Often missing in this JSON
+          category: normalizeCategory(s.category || 'other', title),
           date: Date.now().toString(),
           popular: '0',
           sources: extraSources,
@@ -245,12 +272,12 @@ async function getAllMatches() {
       });
     }
   } catch (error) {
-    console.error('[API] Error fetching from Streamed-Images JSON:', error.message);
+    console.error('[API] Error fetching from Extra BinTV JSON:', error.message);
   }
 
-  // 5. Fetch from TimStreams (vixnuvew API)
+  // 5. Fetch from TimStreams (Fourth Source)
   try {
-    const tsRes_req = await request('https://timst.cfd/api/live-upcoming', { headersTimeout: 7000, bodyTimeout: 7000 });
+    const tsRes_req = await request('https://prabashsapkota.github.io/tvsports/index.json', { headersTimeout: 7000, bodyTimeout: 7000 });
     const tsRes = {
       data: await tsRes_req.body.text().then(t => { try { return JSON.parse(t); } catch(e) { return t; } })
     };
@@ -262,7 +289,7 @@ async function getAllMatches() {
         
         // Map genre integer to normalized category string
         const genreLabel = genres[String(s.genre)] || 'other';
-        const category = normalizeCategory(genreLabel);
+        const category = normalizeCategory(genreLabel, title);
         
         // Parse ISO time to unix ms timestamp
         let dateMs = Date.now();
