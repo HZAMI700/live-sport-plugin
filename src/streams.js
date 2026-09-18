@@ -323,7 +323,7 @@ async function handleStream(type, id, config) {
     streamfree: 'StreamFree', timstreams: 'TimStreams',
     sportyhunter: 'SportyHunter', streamsports: 'StreamSports',
     'iptv-org': 'Direct IPTV', 'streamsports99': 'StreamSports99',
-    'streamic': 'Streamic',
+    'streamic': 'Streamic', watchfooty: 'WatchFooty', cdnlive: 'CDNLiveTV',
     'embedindia': 'EmbedIndia', 'embedst': 'Embed.st', 'streamedpk': 'Streamed.pk'
   };
 
