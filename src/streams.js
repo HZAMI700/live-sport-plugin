@@ -370,12 +370,20 @@ async function handleStream(type, id, config) {
     s.name = isWeb ? '🌐 Web Stream' : '⚡ Direct Stream';
     
     if (channelName) {
-      // Don't format title case if it breaks our channel name. Actually, just clean it up slightly.
-      channelName = channelName.trim();
+      const lower = channelName.toLowerCase();
+      const forbidden = ['clean player', 'web player', 'extract', 'direct', 'stream', 'match', 'live'];
+      const hasProvider = Object.keys(niceNames).some(k => lower.includes(k) || lower.includes(niceNames[k].toLowerCase()));
+      if (forbidden.some(f => lower === f || lower.startsWith(f)) || hasProvider) {
+        channelName = '';
+      } else {
+        channelName = channelName.trim();
+      }
     }
     
-    const channelDisplay = channelName ? ` | 📺 ${channelName}` : '';
-    s.title = `${icon} ${providerName}${channelDisplay}\n📺 Quality: ${quality}${viewersText}`;
+    s._quality = quality;
+    s._channelName = channelName;
+    s._viewersText = viewersText;
+    s._isDirectIptv = (providerName === 'Direct IPTV' && s.url);
     
     // Add behaviorHints to group streams and handle CORS for direct streams
     s.behaviorHints = s.behaviorHints || {};
@@ -406,11 +414,6 @@ async function handleStream(type, id, config) {
         }
       }
     }
-    
-    // Add extra info if present
-    if (providerName === 'Direct IPTV' && s.url) {
-      s.title = `📺 ${channelName || '24/7 Live Network'}\n⚙️ Quality: ${quality}`;
-    }
   });
 
   // Sort streams: Direct streams first, then by score descending
@@ -419,6 +422,20 @@ async function handleStream(type, id, config) {
     const bIsDirect = b.name === '⚡ Direct Stream' ? 1 : 0;
     if (aIsDirect !== bIsDirect) return bIsDirect - aIsDirect;
     return b.score - a.score;
+  });
+
+  // Assign clean numbered server titles (Server 1, Server 2, Server 3, Server 4) without leaking provider names
+  streams.forEach((s, idx) => {
+    if (s._isDirectIptv) {
+      s.title = `📺 ${s._channelName || '24/7 Live Network'}\n⚙️ Quality: ${s._quality}`;
+    } else {
+      const channelDisplay = s._channelName ? ` | 📺 ${s._channelName}` : '';
+      s.title = `${icon} Server ${idx + 1}${channelDisplay}\n📺 Quality: ${s._quality}${s._viewersText}`;
+    }
+    delete s._channelName;
+    delete s._quality;
+    delete s._viewersText;
+    delete s._isDirectIptv;
   });
 
   // Verification now happens once per mint (mintVerifiedSources), not per request.
