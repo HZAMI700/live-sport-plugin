@@ -1181,10 +1181,10 @@ app.get('/watch', (req, res) => {
 
   <iframe
     id="player"
-    sandbox="allow-scripts allow-same-origin allow-presentation allow-forms"
+    sandbox="allow-scripts allow-same-origin allow-forms"
     referrerpolicy="no-referrer"
     allowfullscreen
-    allow="autoplay; encrypted-media; fullscreen; picture-in-picture; accelerometer; gyroscope"
+    allow="autoplay; fullscreen; picture-in-picture"
     scrolling="no"
     loading="eager"
   ></iframe>
@@ -1288,6 +1288,9 @@ app.get('/watch', (req, res) => {
       let iframeSource = targetUrl;
       if (!iframeSource.includes('/api/clean-player') && !iframeSource.includes('/api/manifest')) {
         iframeSource = '/api/clean-player?url=' + encodeURIComponent(targetUrl) + '&title=' + encodeURIComponent(${JSON.stringify(safeTitle)});
+      }
+      if (targetUrl.includes('streamed') || targetUrl.includes('embed.st') || iframeSource.includes('streamed') || iframeSource.includes('embed.st')) {
+        iframe.removeAttribute('sandbox');
       }
       iframe.src = iframeSource;
       iframe.addEventListener('load', () => loader.classList.add('hidden'));
